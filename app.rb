@@ -64,6 +64,10 @@ class SlideShow
   def add_slide(s)
     @slides << s
   end
+  def remove_last_slide
+    @slides.pop
+    @slides.last
+  end
   def export(filepath)
     file = File.open("./#{filepath}", 'w')
     file.puts @slides.size
@@ -80,7 +84,6 @@ class SlideShow
       return sort(0,@slides.length)
     end
     slot = (@slides.length / th_num).to_i
-    puts "slot is: #{slot}"
     threads = []
     th_num.times do |i|
       threads << Thread.new  {sort(slot*i,slot*(i+1))}
@@ -92,12 +95,10 @@ class SlideShow
   def sort(from,to)
     return if from > @slides.length
     return if to > @slides.length
-    puts "start sort from #{from} to #{to}"
     all_slide = @slides[from...to]
     sorted_slide = [all_slide.pop]
 
     while all_slide.count > 0
-      puts "rimangono #{all_slide.count}"
       slide1 = sorted_slide.last
       slide2 = all_slide.first
       actual_score = score(slide1,slide2)
@@ -112,7 +113,6 @@ class SlideShow
       end
       sorted_slide.push(slide2)
       all_slide.delete(slide2)
-      puts "rimangono #{all_slide.count}"
     end
     @sorted_slides += sorted_slide
   end
@@ -149,31 +149,31 @@ class SlideBuilder
     @slide_shows = []
   end
 
-  def find_best_match(slide, photos)
-    #time_start = Time.now
-    best_id={score: 0, photo: nil}
-    photos.each do |x|
+  def find_best_match(slide, photos, excluded_ids=[])
+    time_start = Time.now.to_f
+    best_id=nil
+    photos.each_with_index do |x,i|
+      next if excluded_ids.include? x[:id]
       score = [(slide.tags & x[:tags]).size, (slide.tags - x[:tags]).size, (x[:tags]-slide.tags).size ]
-      #puts " #{Thread.current.object_id}  ... "
+      best_id ||= {score: score.min, photo: x}
       if score.min > ((slide.tag_num / 2) - 1)
         best_id = {score: score.min, photo: x}
-        #puts "#{Thread.current.object_id} selecting photos with same tags #{Time.now - time_start}"
         return best_id
-      elsif score.min >= best_id[:score]
+      #elsif (i > photos.size / 3) && (score.min > ((slide.tag_num / 2)*0.5))
+      #  best_id = {score: score.min, photo: x}
+      #  return best_id
+      elsif score.min > best_id[:score]
         best_id = {score: score.min, photo: x}
       end
     end
-    #puts "#{Thread.current.object_id} selecting photos with same tags #{Time.now - time_start}"
+    total_time = Time.now.to_f - time_start
     return best_id
   end
 
   def build!(name)
-    vertical_photos = []
+    puts "start build #{name}"
+
     horizontal_slides = SlideShow.new
-    # una foto H che ha 4 tag darà il massimo punteggio
-    # con una altra foto da 4 tag con 2 soli tag in comune
-    # una voto verticale che ha 4 tag va accoppiata con un'altra con
-    # 4 tag diversi e poi associata con una che ha la metà dei tag
 
     all_ids = @vphotos.keys
     all_ids += @hphotos.keys
@@ -195,29 +195,29 @@ class SlideBuilder
     end
 
     horizontal_slides.add_slide(s)
-
+    start_time = Time.now
     while all_ids.any?
-      puts "#{name} mancano #{all_ids.size}"
+      elapsed = Time.now - start_time
+      puts "#{name} done #{horizontal_slides.slides.size} mancano #{all_ids.size} - #{elapsed} sec  #{elapsed/horizontal_slides.slides.count} sec/photo"
       s1=nil
       s2=nil
+
       th1 = Thread.new do
         s1=nil
         h_photo_ids = s.tags.map{|x| @tags[x][:h_ids]}.flatten.uniq
         top_h_photos_with_same_tags = h_photo_ids.map{|id| @hphotos[id]}.compact.sort_by { |x | x[:tag_num]}.reverse
+
         best_id = find_best_match(s, top_h_photos_with_same_tags)
-        if best_id[:photo]
+        if best_id && best_id[:photo]
           s1 = Slide.new(best_id[:photo])
         end
-
       end
       th1.join
 
       th2 = Thread.new do
         s2=nil
-
         v_photo_ids = s.tags.map{|x| @tags[x][:v_ids]}.flatten
-
-        photo_v_same_tags = v_photo_ids.map{|id| @vphotos[id]}.compact
+        photo_v_same_tags = v_photo_ids.map{|id| @vphotos[id]}.compact.sort_by { |x | x[:tag_num]}.reverse
         best_id={similar_tags: 0, photo: nil}
         photo_v_same_tags.each do |x|
           if (s.tags & x[:tags]).size < (s.tag_num / 2)
@@ -231,8 +231,11 @@ class SlideBuilder
 
         if !best_id[:photo].nil?
           s2 = Slide.new(best_id[:photo])
-          photo_v_no_tags = @vphotos.values.select{|x| !v_photo_ids.include?(x[:id])}.compact.sort_by { |x | x[:tag_num]}.reverse
-          best_id=find_best_match(s, photo_v_no_tags)
+          #photo_v_no_tags = @vphotos.values.select{|x| !v_photo_ids.include?(x[:id])}.compact.sort_by { |x | x[:tag_num]}.reverse
+          #photo_v_no_tags = @vphotos.values - photo_v_same_tags
+          photo_v_no_tags = @vphotos.values #- photo_v_same_tags
+
+          best_id=find_best_match(s, photo_v_no_tags, s2.ids )
           if best_id[:photo]
             s2.add_photo(best_id[:photo])
           else
@@ -243,14 +246,14 @@ class SlideBuilder
 
       th2.join
 
-      score1,score2 = 0
+      score1,score2 = 0,0
       th_sc1 = Thread.new {score1=horizontal_slides.score(s,s1)}
       th_sc2 = Thread.new {score2=horizontal_slides.score(s,s2)}
 
       if s1
         th_sc1.join
         th_sc2.join
-        if score1 >= score2
+        if score1 > score2
           horizontal_slides.add_slide(s1)
           s1.ids.each do |x|
             @hphotos.delete(x)
@@ -268,6 +271,7 @@ class SlideBuilder
         end
         s=s2
       else
+        #s=horizontal_slides.remove_last_slide
         all_ids = []
       end
     end
@@ -287,9 +291,10 @@ threads = []
 my_path ="out/#{Time.now.to_i}"
 Dir.mkdir my_path
 [file1,file2,file3,file4,file5].each do |input_file|
-  ip = InputParser.new(input_file)
-  ip.parse!
-  th = Thread.new do
+#[file4,file5].each do |input_file|
+  fork do
+    ip = InputParser.new(input_file)
+    ip.parse!
     sb = SlideBuilder.new(vphotos: ip.vphotos,hphotos: ip.hphotos, tags: ip.tags)
     sb.build!(input_file)
     sb.slide_shows.each_with_index do |slide_show,i|
@@ -298,6 +303,6 @@ Dir.mkdir my_path
     end
   end
   #th.join
-  threads << th
+  #threads << th
 end
-threads.map {|th| th.join }
+#threads.map {|th| th.join }
