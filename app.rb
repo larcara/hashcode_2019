@@ -1,3 +1,4 @@
+require 'enumerator'
 
 DEBUG = false
 class InputParser
@@ -52,6 +53,17 @@ class Slide
   def to_s
     "#{self.ids} #{self.tags}"
   end
+  def score(slide2)
+    return 0 if slide2.nil?
+    in_comune = @tags & slide2.tags
+    return 0 if in_comune == 0
+    solo_1    = @tags - slide2.tags
+    return 0 if solo_1 == 0
+    solo_2    = slide2 - @tags
+    return 0 if solo_2 == 0
+    [solo_1.length,solo_2.length,in_comune.length].min
+  end
+
 end
 
 class SlideShow
@@ -142,140 +154,196 @@ end
 
 class SlideBuilder
   attr_accessor :slide_shows
-  def initialize(hphotos:nil, vphotos:nil, tags:nil)
-    @hphotos = hphotos
-    @vphotos = vphotos
+  def initialize(photos:nil, tags:nil, name: nil)
+    @photos = photos
     @tags = tags
-    @slide_shows = []
+    @name = name
+    @slide_shows = nil
   end
+
 
   def find_best_match(slide, photos, excluded_ids=[])
     time_start = Time.now.to_f
-    best_id=nil
-    photos.each_with_index do |x,i|
+    best_id={score: -1, photo: nil, max_value: false}
+    photos.each do |x|
       next if excluded_ids.include? x[:id]
       score = [(slide.tags & x[:tags]).size, (slide.tags - x[:tags]).size, (x[:tags]-slide.tags).size ]
-      best_id ||= {score: score.min, photo: x}
+      best_id ||= {score: score.min, photo: x, max_value: false}
       if score.min > ((slide.tag_num / 2) - 1)
-        best_id = {score: score.min, photo: x}
+        best_id = {score: score.min, photo: x, max_value: true}
         return best_id
       #elsif (i > photos.size / 3) && (score.min > ((slide.tag_num / 2)*0.5))
       #  best_id = {score: score.min, photo: x}
       #  return best_id
-      elsif score.min > best_id[:score]
-        best_id = {score: score.min, photo: x}
+      elsif score.min >= best_id[:score]
+        best_id = {score: score.min, photo: x, max_value: false}
       end
     end
     total_time = Time.now.to_f - time_start
     return best_id
   end
 
-  def build!(name)
-    puts "start build #{name}"
+  def build!
+    @slide_shows  = organize_slide( @photos)
+  end
 
-    horizontal_slides = SlideShow.new
+  def organize_slide (photos)
+    vphotos = {}
+    hphotos = {}
+    photos.each do |k,v|
+      if v[:hv]=="V"
+        vphotos[k]=v
+      else
+        hphotos[k]=v
+      end
+    end
 
-    all_ids = @vphotos.keys
-    all_ids += @hphotos.keys
+    all_ids = []
+    all_ids += vphotos.keys if vphotos
+    all_ids += hphotos.keys if hphotos
+
     s = Slide.new(nil)
-    photo = @hphotos.values.max_by{ |x| x[:tag_num]}
+    slideshow = SlideShow.new
+
+    return slideshow if all_ids.empty?
+
+    photo = hphotos.values.max_by{ |x| x[:tag_num]} # parto da quella con più tag
 
     if photo.nil?
-      photo = @vphotos.values.max_by(2){ |x| x[:tag_num]}
+      #se non ho la prima orinzonale, prendo le prime 2 verticali
+      photo = vphotos.values.max_by(2){ |x| x[:tag_num]}
       s.add_photo(photo.first)
       s.add_photo(photo.last)
       all_ids.delete(photo.first[:id])
       all_ids.delete(photo.last[:id])
-      @vphotos.delete(photo.first[:id])
-      @vphotos.delete(photo.last[:id])
+      vphotos.delete(photo.first[:id])
+      vphotos.delete(photo.last[:id])
     else
       s.add_photo(photo)
       all_ids.delete(photo[:id])
-      @hphotos.delete(photo[:id])
+      hphotos.delete(photo[:id])
     end
 
-    horizontal_slides.add_slide(s)
+    slideshow.add_slide(s)
     start_time = Time.now
+
+    #ciclo alla ricerca del best match tra tutte le altre foto
     while all_ids.any?
       elapsed = Time.now - start_time
-      puts "#{name} done #{horizontal_slides.slides.size} mancano #{all_ids.size} - #{elapsed} sec  #{elapsed/horizontal_slides.slides.count} sec/photo"
+      score1={score: -1, photo: nil, max_value: false}
+      score2={score: -1, photo: nil, max_value: false}
       s1=nil
       s2=nil
+      #prendo tutti gli id delle foto H che hanno uno dei tag della slide corrente
+      h_photo_ids = s.tags.map{|x| @tags[x][:h_ids]}.flatten.uniq
 
-      th1 = Thread.new do
-        s1=nil
-        h_photo_ids = s.tags.map{|x| @tags[x][:h_ids]}.flatten.uniq
-        top_h_photos_with_same_tags = h_photo_ids.map{|id| @hphotos[id]}.compact.sort_by { |x | x[:tag_num]}.reverse
+      #e prendo tutte le foto. ho bisogno di almeno un match
+      top_h_photos_with_same_tags = h_photo_ids.map{|id| hphotos[id]}.compact
 
-        best_id = find_best_match(s, top_h_photos_with_same_tags)
-        if best_id && best_id[:photo]
-          s1 = Slide.new(best_id[:photo])
-        end
-      end
-      th1.join
-
-      th2 = Thread.new do
-        s2=nil
-        v_photo_ids = s.tags.map{|x| @tags[x][:v_ids]}.flatten
-        photo_v_same_tags = v_photo_ids.map{|id| @vphotos[id]}.compact.sort_by { |x | x[:tag_num]}.reverse
-        best_id={similar_tags: 0, photo: nil}
-        photo_v_same_tags.each do |x|
-          if (s.tags & x[:tags]).size < (s.tag_num / 2)
-            best_id={similar_tags: (s.tags & x[:tags]).size, photo: x}
-            break
-          end
-          if (s.tags & x[:tags]).size >= best_id[:similar_tags]
-            best_id={similar_tags: (s.tags & x[:tags]).size, photo: x}
-          end
-        end
-
-        if !best_id[:photo].nil?
-          s2 = Slide.new(best_id[:photo])
-          #photo_v_no_tags = @vphotos.values.select{|x| !v_photo_ids.include?(x[:id])}.compact.sort_by { |x | x[:tag_num]}.reverse
-          #photo_v_no_tags = @vphotos.values - photo_v_same_tags
-          photo_v_no_tags = @vphotos.values #- photo_v_same_tags
-
-          best_id=find_best_match(s, photo_v_no_tags, s2.ids )
-          if best_id[:photo]
-            s2.add_photo(best_id[:photo])
-          else
-            s2=nil
-          end
-        end
-      end
-
-      th2.join
-
-      score1,score2 = 0,0
-      th_sc1 = Thread.new {score1=horizontal_slides.score(s,s1)}
-      th_sc2 = Thread.new {score2=horizontal_slides.score(s,s2)}
-
-      if s1
-        th_sc1.join
-        th_sc2.join
-        if score1 > score2
-          horizontal_slides.add_slide(s1)
+      #cerco la slide migliore
+      score1 = find_best_match(s, top_h_photos_with_same_tags)
+      if score1  && score1[:photo]
+        s1 = Slide.new(score1[:photo])
+        #se ha un punteggio massimo, passo avanti
+        if score1[:max_value]
+          slideshow.add_slide(s1)
           s1.ids.each do |x|
-            @hphotos.delete(x)
+            #cancello le foto usate
+            hphotos.delete(x)
+            all_ids.delete(x)
+          end
+          #aggiorno il puntatore
+          s=s1
+          #riparte il ciclo
+          next
+        end
+      end
+
+      # ho la s1 (forse) ma non è il massimo. cerco tra le verticali
+
+      #id delle foto con gli stessi tag della slide corrente
+      v_photo_ids = s.tags.map{|x| @tags[x][:v_ids]}.flatten
+
+      #array delle photo con gli stessi tag
+      photo_v_same_tags = v_photo_ids.map{|id| vphotos[id]}.compact
+
+      photo_v_same_tags.each do |x|
+        #per ogni foto costruisco una slide e vedo se trovo una copia
+        # con il punteggio massimo
+        s2 = Slide.new(x)
+        tmp_score2=find_best_match(s, vphotos.values , s2.ids )
+        if tmp_score2[:max_value]
+          score2=tmp_score2
+          s2.add_photo(score2[:photo])
+          slideshow.add_slide(s2)
+          s2.ids.each do |x|
+            vphotos.delete(x)
+            all_ids.delete(x)
+          end
+          break
+        elsif tmp_score2[:score] > score2[:score]
+          score2=tmp_score2
+        end
+      end
+      if score2[:max_value]
+        next
+      end
+      if score2[:photo]
+        s2.add_photo(score2[:photo])
+      else
+        s2 = nil
+      end
+      #se sono qui ho i due score da confonrare
+
+      #se sono entrambi nulli, non ho trovato più nulla.. esco
+      if score1[:photo].nil? && score2[:photo].nil?
+        #prendo una slide a caso e riparto
+        if hphotos
+          x = hphotos.first
+          s1 = Slide.new(x[1])
+          slideshow.add_slide(s1)
+          s1.ids.each do |x|
+            hphotos.delete(x)
             all_ids.delete(x)
           end
           s=s1
           next
+        else
+          x = vphotos.first
+          s2 = Slide.new(x[1])
+          hphotos.delete(x)
+          all_ids.delete(x)
+          x = vphotos.first
+          s2 = Slide.new(x[1])
+          hphotos.delete(x)
+          all_ids.delete(x)
+          slideshow.add_slide(s2)
+          s2.ids.each do |x|
+            vphotos.delete(x)
+            all_ids.delete(x)
+          end
+          s=s2
+          next
         end
-      end
-      if s2
-        horizontal_slides.add_slide(s2)
+      elsif score1[:score] > score2[:score]
+        #ho solo score 1 oppure score1 > score2
+        slideshow.add_slide(s1)
+        s1.ids.each do |x|
+          hphotos.delete(x)
+          all_ids.delete(x)
+        end
+        s=s1
+      else
+        slideshow.add_slide(s2)
         s2.ids.each do |x|
-          @vphotos.delete(x)
+          vphotos.delete(x)
           all_ids.delete(x)
         end
         s=s2
-      else
-        #s=horizontal_slides.remove_last_slide
-        all_ids = []
       end
+      puts "#{@name} done #{slideshow.slides.size} mancano #{all_ids.size} - #{elapsed} sec  #{elapsed/slideshow.slides.count} sec/photo"
     end
-    @slide_shows = [horizontal_slides]
+    return slideshow
   end
 end
 
@@ -291,16 +359,14 @@ threads = []
 my_path ="out/#{Time.now.to_i}"
 Dir.mkdir my_path
 [file1,file2,file3,file4,file5].each do |input_file|
-#[file4,file5].each do |input_file|
   fork do
     ip = InputParser.new(input_file)
     ip.parse!
-    sb = SlideBuilder.new(vphotos: ip.vphotos,hphotos: ip.hphotos, tags: ip.tags)
-    sb.build!(input_file)
-    sb.slide_shows.each_with_index do |slide_show,i|
-      #slide_show.sort!
-      slide_show.export("#{my_path}/#{input_file}_#{slide_show.final_score}.out")
-    end
+    photos = ip.vphotos.merge(ip.hphotos)
+    sb = SlideBuilder.new(photos: photos, tags: ip.tags, name: input_file)
+    sb.build!
+    #sb.slide_shows.sort!
+    sb.slide_shows.export("#{my_path}/#{input_file}_#{sb.slide_shows.final_score}.out")
   end
   #th.join
   #threads << th
