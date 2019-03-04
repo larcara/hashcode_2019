@@ -301,8 +301,8 @@ class SlideBuilder
         #per ogni foto costruisco una slide e vedo se trovo una copia
         # con il punteggio massimo
         s2 = Slide.new(vp)
-        tmp_score2=find_best_vmatch(s, vp,vphotos.values , v_photo_ids )
-        tmp_score2=find_best_vmatch(s, vp,vphotos.values , s2.ids ) if tmp_score2[:photo].nil?
+        #tmp_score2=find_best_vmatch(s, vp,vphotos.values , v_photo_ids )
+        tmp_score2=find_best_vmatch(s, vp,vphotos.values , s2.ids )
         if tmp_score2[:max_value]
           score2=tmp_score2
           s2.add_photo(score2[:photo])
