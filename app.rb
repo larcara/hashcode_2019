@@ -59,7 +59,7 @@ class Slide
     return 0 if in_comune == 0
     solo_1    = @tags - slide2.tags
     return 0 if solo_1 == 0
-    solo_2    = slide2 - @tags
+    solo_2    = slide2.tags - @tags
     return 0 if solo_2 == 0
     [solo_1.length,solo_2.length,in_comune.length].min
   end
@@ -162,6 +162,28 @@ class SlideBuilder
   end
 
 
+  def find_best_vmatch(slide, photo1, photos, excluded_ids=[])
+    best_id={score: -1, photo: nil, max_value: false}
+    photos.each do |x|
+      next if excluded_ids.include? x[:id]
+      slide2 = Slide.new(photo1)
+      slide2.add_photo(x)
+      score = slide.score(slide2)
+      best_id ||= {score: score, photo: x, max_value: false}
+      if score > ((slide.tag_num / 2) - 1)
+        best_id = {score: score, photo: x, max_value: true}
+        return best_id
+        #elsif (i > photos.size / 3) && (score.min > ((slide.tag_num / 2)*0.5))
+        #  best_id = {score: score.min, photo: x}
+        #  return best_id
+      elsif score >= best_id[:score]
+        best_id = {score: score, photo: x, max_value: false}
+      end
+    end
+    return best_id
+  end
+
+
   def find_best_match(slide, photos, excluded_ids=[])
     time_start = Time.now.to_f
     best_id={score: -1, photo: nil, max_value: false}
@@ -230,6 +252,7 @@ class SlideBuilder
     #ciclo alla ricerca del best match tra tutte le altre foto
     while all_ids.any?
       elapsed = Time.now - start_time
+      puts "#{@name} done #{slideshow.slides.size} mancano #{all_ids.size} - #{elapsed} sec  #{elapsed/slideshow.slides.count} sec/photo"
       score1={score: -1, photo: nil, max_value: false}
       score2={score: -1, photo: nil, max_value: false}
       s1=nil
@@ -258,20 +281,28 @@ class SlideBuilder
           next
         end
       end
-
       # ho la s1 (forse) ma non è il massimo. cerco tra le verticali
 
       #id delle foto con gli stessi tag della slide corrente
-      v_photo_ids = s.tags.map{|x| @tags[x][:v_ids]}.flatten
 
+      v_photo_ids = nil #s.tags.map{|x| @tags[x][:v_ids]}.flatten
+
+      s.tags.each do |x|
+        v_photo_ids  ||= @tags[x][:v_ids]
+        v_photo_ids  = v_photo_ids & @tags[x][:v_ids]
+      end
+
+      v_photo_ids = s.tags.map{|x| @tags[x][:v_ids]}.flatten if v_photo_ids.empty?
       #array delle photo con gli stessi tag
       photo_v_same_tags = v_photo_ids.map{|id| vphotos[id]}.compact
 
-      photo_v_same_tags.each do |x|
+      #photo_v_same_tags.each do |x|
+        vp = photo_v_same_tags.first
         #per ogni foto costruisco una slide e vedo se trovo una copia
         # con il punteggio massimo
-        s2 = Slide.new(x)
-        tmp_score2=find_best_match(s, vphotos.values , s2.ids )
+        s2 = Slide.new(vp)
+        tmp_score2=find_best_vmatch(s, vp,vphotos.values , v_photo_ids )
+        tmp_score2=find_best_vmatch(s, vp,vphotos.values , s2.ids ) if tmp_score2[:photo].nil?
         if tmp_score2[:max_value]
           score2=tmp_score2
           s2.add_photo(score2[:photo])
@@ -284,7 +315,7 @@ class SlideBuilder
         elsif tmp_score2[:score] > score2[:score]
           score2=tmp_score2
         end
-      end
+      #end
       if score2[:max_value]
         next
       end
@@ -298,7 +329,7 @@ class SlideBuilder
       #se sono entrambi nulli, non ho trovato più nulla.. esco
       if score1[:photo].nil? && score2[:photo].nil?
         #prendo una slide a caso e riparto
-        if hphotos
+        if hphotos.size > 0
           x = hphotos.first
           s1 = Slide.new(x[1])
           slideshow.add_slide(s1)
@@ -341,7 +372,7 @@ class SlideBuilder
         end
         s=s2
       end
-      puts "#{@name} done #{slideshow.slides.size} mancano #{all_ids.size} - #{elapsed} sec  #{elapsed/slideshow.slides.count} sec/photo"
+
     end
     return slideshow
   end
@@ -358,8 +389,9 @@ file5="e_shiny_selfies.txt"
 threads = []
 my_path ="out/#{Time.now.to_i}"
 Dir.mkdir my_path
-[file1,file2,file3,file4,file5].each do |input_file|
-  fork do
+#[file1,file2,file3,file4,file5].each do |input_file|
+[file5].each do |input_file|
+#  fork do
     ip = InputParser.new(input_file)
     ip.parse!
     photos = ip.vphotos.merge(ip.hphotos)
@@ -367,7 +399,7 @@ Dir.mkdir my_path
     sb.build!
     #sb.slide_shows.sort!
     sb.slide_shows.export("#{my_path}/#{input_file}_#{sb.slide_shows.final_score}.out")
-  end
+ # end
   #th.join
   #threads << th
 end
