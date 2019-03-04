@@ -389,9 +389,9 @@ file5="e_shiny_selfies.txt"
 threads = []
 my_path ="out/#{Time.now.to_i}"
 Dir.mkdir my_path
-#[file1,file2,file3,file4,file5].each do |input_file|
-[file5].each do |input_file|
-#  fork do
+[file1,file2,file3,file4,file5].each do |input_file|
+#[file5].each do |input_file|
+  fork do
     ip = InputParser.new(input_file)
     ip.parse!
     photos = ip.vphotos.merge(ip.hphotos)
@@ -399,7 +399,7 @@ Dir.mkdir my_path
     sb.build!
     #sb.slide_shows.sort!
     sb.slide_shows.export("#{my_path}/#{input_file}_#{sb.slide_shows.final_score}.out")
- # end
+  end
   #th.join
   #threads << th
 end
