@@ -253,7 +253,7 @@ class SlideBuilder
     while all_ids.any?
       elapsed = Time.now - start_time
       puts "#{@name} done #{slideshow.slides.size} mancano #{all_ids.size} - #{elapsed} sec  #{elapsed/slideshow.slides.count} sec/photo"
-      score1={score: -1, photo: nil, max_value: false}
+
       score2={score: -1, photo: nil, max_value: false}
       s1=nil
       s2=nil
@@ -261,7 +261,7 @@ class SlideBuilder
       h_photo_ids = s.tags.map{|x| @tags[x][:h_ids]}.flatten.uniq
 
       #e prendo tutte le foto. ho bisogno di almeno un match
-      top_h_photos_with_same_tags = h_photo_ids.map{|id| hphotos[id]}.compact
+      top_h_photos_with_same_tags = h_photo_ids.map{|id| hphotos[id]}.compact.sort_by{|x| x[:tag_num]}
 
       #cerco la slide migliore
       score1 = find_best_match(s, top_h_photos_with_same_tags)
@@ -311,7 +311,7 @@ class SlideBuilder
             vphotos.delete(x)
             all_ids.delete(x)
           end
-          break
+          #break
         elsif tmp_score2[:score] > score2[:score]
           score2=tmp_score2
         end
@@ -325,9 +325,9 @@ class SlideBuilder
         s2 = nil
       end
       #se sono qui ho i due score da confonrare
-
       #se sono entrambi nulli, non ho trovato più nulla.. esco
       if score1[:photo].nil? && score2[:photo].nil?
+
         #prendo una slide a caso e riparto
         if hphotos.size > 0
           x = hphotos.first
@@ -340,19 +340,16 @@ class SlideBuilder
           s=s1
           next
         else
-          x = vphotos.first
-          s2 = Slide.new(x[1])
-          hphotos.delete(x)
-          all_ids.delete(x)
-          x = vphotos.first
-          s2 = Slide.new(x[1])
-          hphotos.delete(x)
-          all_ids.delete(x)
-          slideshow.add_slide(s2)
-          s2.ids.each do |x|
-            vphotos.delete(x)
-            all_ids.delete(x)
+          s2 = Slide.new(nil)
+          2.times do
+            x = vphotos.first
+            s2.add_photo(x[1])
+            s2.ids.each do |x|
+              vphotos.delete(x)
+              all_ids.delete(x)
+            end
           end
+          slideshow.add_slide(s2)
           s=s2
           next
         end
@@ -390,8 +387,9 @@ threads = []
 my_path ="out/#{Time.now.to_i}"
 Dir.mkdir my_path
 [file1,file2,file3,file4,file5].each do |input_file|
-#[file5].each do |input_file|
-  fork do
+#[file4].each do |input_file|
+  #threads << Thread.new do
+ fork do
     ip = InputParser.new(input_file)
     ip.parse!
     photos = ip.vphotos.merge(ip.hphotos)
@@ -400,7 +398,6 @@ Dir.mkdir my_path
     #sb.slide_shows.sort!
     sb.slide_shows.export("#{my_path}/#{input_file}_#{sb.slide_shows.final_score}.out")
   end
-  #th.join
-  #threads << th
+
 end
-#threads.map {|th| th.join }
+threads.map {|th| th.join }
